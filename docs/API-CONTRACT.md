@@ -1,1347 +1,1454 @@
-````markdown
-# VELTRIX — API Contract
+# VELTRIX — REST API Contract & Specification
 
 ## 1. Purpose
 
-This document defines the contract between the VELTRIX frontend and backend.
+This document defines the official REST API contract between the VELTRIX frontend and backend. It specifies the base structure, endpoints, authentication requirements, role-based authorization rules, request formats, response payloads, and HTTP status codes.
 
-It specifies the API structure, endpoints, authentication requirements, request formats, response formats, permissions, validation rules, and common error handling that frontend and backend developers must follow.
-
-The purpose of this contract is to ensure that all four team members build against the same API expectations and that frontend, backend, database, and AI-assisted development remain consistent.
+All team members must develop against this contract to ensure consistent integration between the React frontend, Node.js/Express backend, and MongoDB data layer.
 
 ---
 
-## 2. API Architecture
+## 2. API Architecture & Data Model Consistency
 
-VELTRIX uses a REST API.
+VELTRIX uses a stateless REST API over HTTP/HTTPS.
 
-The general communication flow is:
+### 3-Core-Entity Database Alignment
+In strict alignment with `DATABASE-CONTRACT.md`, the backend is built on **exactly three core top-level MongoDB collections**:
+1. `users`
+2. `exercises`
+3. `exercise_sessions`
 
-```text
-Patient / Therapist
-        ↓
-React Frontend
-        ↓
-REST API
-        ↓
-Node.js + Express Backend
-        ↓
-MongoDB
-````
-
-The frontend must communicate with the database through the backend API.
-
-The frontend must not directly access MongoDB.
+There are **no standalone top-level collections or API resources for assignments or notes**. Instead:
+- **Exercise Assignments** are subdocuments (`assignedExercises[]`) embedded inside patient user documents in the `users` collection.
+- **Therapist Notes** are subdocuments (`therapistNotes[]`) embedded inside patient user documents in the `users` collection.
 
 ---
 
-## 3. Base API Structure
+## 3. Base API Configuration
 
-All API endpoints should follow the general structure:
-
-```text
-/api/<resource>
-```
-
-Examples:
-
-```text
-/api/auth
-/api/users
-/api/exercises
-/api/assignments
-/api/sessions
-/api/progress
-/api/notes
-```
-
-The exact production base URL will be defined during deployment.
-
-For local development, the API will use the locally configured backend server URL.
+- **Base Endpoint Path**: `/api`
+- **Protocol**: HTTPS (HTTP for local development)
+- **Data Format**: `application/json` for all request and response bodies
+- **Authentication Strategy**: Bearer Token in HTTP Authorization Header:
+  ```http
+  Authorization: Bearer <JWT_TOKEN>
+  ```
 
 ---
 
-## 4. HTTP Methods
+## 4. User Roles & Authorization Strategy
 
-VELTRIX follows standard REST conventions.
+VELTRIX defines two primary role identifiers (case-sensitive lowercase strings):
+- **`patient`**: Individuals performing assigned rehabilitation exercises and logging completed sessions.
+- **`therapist`**: Clinical professionals managing the exercise catalog, assigning exercise programs, viewing patient progress, and recording clinical notes.
 
-| Method | Purpose                                              |
-| ------ | ---------------------------------------------------- |
-| GET    | Retrieve data                                        |
-| POST   | Create data or perform an action                     |
-| PUT    | Replace/update an existing resource                  |
-| PATCH  | Partially update an existing resource where required |
-| DELETE | Delete a resource                                    |
-
-CRUD mapping:
-
-```text
-Create → POST
-Read   → GET
-Update → PUT / PATCH
-Delete → DELETE
-```
+Server-side role middleware verifies the authenticated user's `role` claim from their JWT on every protected route.
 
 ---
 
-## 5. Authentication
+## 5. Summary Endpoint Matrix
 
-VELTRIX uses JWT-based authentication.
-
-### Authentication flow
-
-```text
-User
- ↓
-Login
- ↓
-POST /api/auth/login
- ↓
-Backend verifies credentials
- ↓
-JWT returned
- ↓
-Frontend uses JWT for protected requests
- ↓
-Backend verifies JWT
- ↓
-Backend checks user role/permissions
- ↓
-Request allowed or rejected
-```
-
-Protected API requests should include the JWT in the authorization header:
-
-```http
-Authorization: Bearer <JWT_TOKEN>
-```
+| Category | Endpoint URI | Method | Auth | Allowed Roles |
+| :--- | :--- | :--- | :--- | :--- |
+| **Authentication** | `/api/auth/register` | `POST` | Public | All (Self-registration) |
+| | `/api/auth/login` | `POST` | Public | All |
+| | `/api/auth/me` | `GET` | Protected | `PATIENT`, `THERAPIST` |
+| **Users & Subdocuments** | `/api/users/me` | `GET` | Protected | `PATIENT`, `THERAPIST` |
+| | `/api/users/me` | `PUT` | Protected | `PATIENT`, `THERAPIST` |
+| | `/api/users/patients` | `GET` | Protected | `THERAPIST` |
+| | `/api/users/patients/:id` | `GET` | Protected | `THERAPIST` |
+| | `/api/users/patients/:id/assignments` | `POST` | Protected | `THERAPIST` |
+| | `/api/users/patients/:id/assignments/:assignmentId` | `PUT` | Protected | `THERAPIST`, `PATIENT` |
+| | `/api/users/patients/:id/assignments/:assignmentId` | `DELETE` | Protected | `THERAPIST` |
+| | `/api/users/patients/:id/notes` | `POST` | Protected | `THERAPIST` |
+| | `/api/users/patients/:id/notes` | `GET` | Protected | `THERAPIST` |
+| **Exercises** | `/api/exercises` | `GET` | Protected | `PATIENT`, `THERAPIST` |
+| | `/api/exercises/:id` | `GET` | Protected | `PATIENT`, `THERAPIST` |
+| | `/api/exercises` | `POST` | Protected | `THERAPIST` |
+| | `/api/exercises/:id` | `PUT` | Protected | `THERAPIST` |
+| | `/api/exercises/:id` | `DELETE` | Protected | `THERAPIST` |
+| **Exercise Sessions** | `/api/sessions` | `POST` | Protected | `PATIENT` |
+| | `/api/sessions` | `GET` | Protected | `PATIENT`, `THERAPIST` |
+| | `/api/sessions/:id` | `GET` | Protected | `PATIENT`, `THERAPIST` |
+| | `/api/sessions/patient/:patientId` | `GET` | Protected | `THERAPIST` |
+| **Patient Dashboard** | `/api/dashboard/patient` | `GET` | Protected | `PATIENT` |
+| **Therapist Dashboard** | `/api/dashboard/therapist` | `GET` | Protected | `THERAPIST` |
 
 ---
 
-## 6. User Roles
+## 6. Detailed API Endpoint Specifications
 
-VELTRIX has two primary roles:
-
-```text
-patient
-therapist
-```
-
-Role-based authorization must be enforced by the backend.
-
-A user's role must never be trusted solely because it was supplied by the frontend.
-
-The backend must determine the authenticated user's identity and permissions from the validated authentication information.
+### AREA 1: AUTHENTICATION ENDPOINTS (`/api/auth`)
 
 ---
 
-# 7. Authentication Endpoints
-
-## 7.1 Register
-
-```http
-POST /api/auth/register
-```
-
-### Purpose
-
-Create a new VELTRIX user account.
-
-### Request body
-
-```json
-{
-  "name": "User Name",
-  "email": "user@example.com",
-  "password": "password",
-  "role": "patient"
-}
-```
-
-### Required fields
-
-* `name`
-* `email`
-* `password`
-* `role`
-
-### Allowed roles
-
-```text
-patient
-therapist
-```
-
-### Success
-
-```text
-201 Created
-```
-
-Example:
-
-```json
-{
-  "success": true,
-  "message": "User registered successfully",
-  "data": {
-    "id": "USER_ID",
-    "name": "User Name",
-    "email": "user@example.com",
-    "role": "patient"
+#### 6.1 Register User Account
+- **HTTP Method**: `POST`
+- **URL**: `/api/auth/register`
+- **Purpose**: Register a new user account (`PATIENT` or `THERAPIST`).
+- **Authentication**: Public (Unauthenticated)
+- **Allowed Roles**: All
+- **Request Parameters**: None
+- **Request Body**:
+  ```json
+  {
+    "name": "Jane Patient",
+    "email": "jane.patient@example.com",
+    "password": "SecurePassword123",
+    "role": "PATIENT"
   }
-}
-```
-
-Passwords must never be returned in the response.
-
-### Possible errors
-
-```text
-400 Bad Request
-409 Conflict
-500 Internal Server Error
-```
-
----
-
-## 7.2 Login
-
-```http
-POST /api/auth/login
-```
-
-### Purpose
-
-Authenticate a user and return a JWT.
-
-### Request body
-
-```json
-{
-  "email": "user@example.com",
-  "password": "password"
-}
-```
-
-### Success
-
-```text
-200 OK
-```
-
-Example:
-
-```json
-{
-  "success": true,
-  "message": "Login successful",
-  "data": {
-    "token": "JWT_TOKEN",
-    "user": {
-      "id": "USER_ID",
-      "name": "User Name",
-      "email": "user@example.com",
-      "role": "patient"
-    }
-  }
-}
-```
-
-### Possible errors
-
-```text
-400 Bad Request
-401 Unauthorized
-500 Internal Server Error
-```
-
----
-
-# 8. User Endpoints
-
-User endpoints must require authentication where they expose protected user information.
-
-## 8.1 Get Current User
-
-```http
-GET /api/users/me
-```
-
-### Authentication
-
-Required.
-
-### Purpose
-
-Return the currently authenticated user's information.
-
-### Success
-
-```text
-200 OK
-```
-
-Example:
-
-```json
-{
-  "success": true,
-  "data": {
-    "id": "USER_ID",
-    "name": "User Name",
-    "email": "user@example.com",
-    "role": "patient"
-  }
-}
-```
-
-### Errors
-
-```text
-401 Unauthorized
-404 Not Found
-500 Internal Server Error
-```
-
----
-
-# 9. Exercise Endpoints
-
-Exercise management is primarily a therapist-controlled feature.
-
-## 9.1 Get Exercises
-
-```http
-GET /api/exercises
-```
-
-### Authentication
-
-Required.
-
-### Purpose
-
-Retrieve exercises available to the authenticated user according to their permissions.
-
-### Success
-
-```text
-200 OK
-```
-
-Example:
-
-```json
-{
-  "success": true,
-  "data": [
+  ```
+  - `name` (`String`, Required): User's full name.
+  - `email` (`String`, Required): Unique, valid email address.
+  - `password` (`String`, Required): Plain text password (min 8 characters).
+  - `role` (`String`, Required): Must be `"PATIENT"` or `"THERAPIST"`.
+- **Successful Response**:
+  - **HTTP Status Code**: `201 Created`
+  - **Body**:
+    ```json
     {
-      "id": "EXERCISE_ID",
-      "name": "Knee Extension",
-      "description": "Exercise description",
-      "targetBodyPart": "Knee",
-      "difficulty": "Beginner",
-      "sets": 3,
-      "repetitions": 10,
-      "duration": null,
-      "instructions": [
-        "Instruction 1",
-        "Instruction 2"
-      ],
-      "demonstrationMedia": null,
-      "safetyInstructions": [
-        "Safety instruction"
+      "success": true,
+      "message": "User registered successfully",
+      "data": {
+        "id": "64d2f1a9b3c4d5e6f7a8b9c0",
+        "name": "Jane Patient",
+        "email": "jane.patient@example.com",
+        "role": "PATIENT",
+        "createdAt": "2026-08-30T10:00:00.000Z"
+      }
+    }
+    ```
+- **Error Responses**:
+  - **`400 Bad Request`**: Missing required fields or invalid password length.
+  - **`409 Conflict`**: Email already registered.
+  - **`500 Internal Server Error`**: Unexpected database error.
+
+---
+
+#### 6.2 Authenticate / Login User
+- **HTTP Method**: `POST`
+- **URL**: `/api/auth/login`
+- **Purpose**: Verify user credentials and issue a JWT.
+- **Authentication**: Public (Unauthenticated)
+- **Allowed Roles**: All
+- **Request Parameters**: None
+- **Request Body**:
+  ```json
+  {
+    "email": "jane.patient@example.com",
+    "password": "SecurePassword123"
+  }
+  ```
+  - `email` (`String`, Required): Registered email address.
+  - `password` (`String`, Required): Plain text password.
+- **Successful Response**:
+  - **HTTP Status Code**: `200 OK`
+  - **Body**:
+    ```json
+    {
+      "success": true,
+      "message": "Login successful",
+      "data": {
+        "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+        "user": {
+          "id": "64d2f1a9b3c4d5e6f7a8b9c0",
+          "name": "Jane Patient",
+          "email": "jane.patient@example.com",
+          "role": "PATIENT"
+        }
+      }
+    }
+    ```
+- **Error Responses**:
+  - **`400 Bad Request`**: Missing email or password.
+  - **`401 Unauthorized`**: Invalid email or password (generic message to prevent email enumeration).
+  - **`500 Internal Server Error`**: Unexpected server failure.
+
+---
+
+#### 6.3 Get Current Authenticated User Context
+- **HTTP Method**: `GET`
+- **URL**: `/api/auth/me`
+- **Purpose**: Validate JWT and return authenticated identity claim context.
+- **Authentication**: Protected (Requires `Authorization: Bearer <JWT_TOKEN>`)
+- **Allowed Roles**: `PATIENT`, `THERAPIST`
+- **Request Parameters**: None
+- **Request Body**: None
+- **Successful Response**:
+  - **HTTP Status Code**: `200 OK`
+  - **Body**:
+    ```json
+    {
+      "success": true,
+      "data": {
+        "id": "64d2f1a9b3c4d5e6f7a8b9c0",
+        "name": "Jane Patient",
+        "email": "jane.patient@example.com",
+        "role": "PATIENT"
+      }
+    }
+    ```
+- **Error Responses**:
+  - **`401 Unauthorized`**: Missing, invalid, or expired JWT.
+  - **`404 Not Found`**: Authenticated user no longer exists in database.
+
+---
+
+### AREA 2: USERS & EMBEDDED SUBDOCUMENT ENDPOINTS (`/api/users`)
+
+---
+
+#### 6.4 Get Current User Profile & Assigned Exercises
+- **HTTP Method**: `GET`
+- **URL**: `/api/users/me`
+- **Purpose**: Fetch full user document. For patients, includes their `assignedExercises[]` array.
+- **Authentication**: Protected
+- **Allowed Roles**: `PATIENT`, `THERAPIST`
+- **Request Parameters**: None
+- **Request Body**: None
+- **Successful Response**:
+  - **HTTP Status Code**: `200 OK`
+  - **Body** (Patient view):
+    ```json
+    {
+      "success": true,
+      "data": {
+        "id": "64d2f1a9b3c4d5e6f7a8b9c0",
+        "name": "Jane Patient",
+        "email": "jane.patient@example.com",
+        "role": "PATIENT",
+        "assignedExercises": [
+          {
+            "id": "64d2f2b1b3c4d5e6f7a8b9c1",
+            "exerciseId": "64d2f001b3c4d5e6f7a8b9e0",
+            "assignedBy": "64d2f000b3c4d5e6f7a8b9d0",
+            "assignedAt": "2026-08-30T10:00:00.000Z",
+            "dueDate": "2026-09-15T23:59:59.000Z",
+            "targetSets": 3,
+            "targetReps": 10,
+            "targetDurationSeconds": null,
+            "frequency": "2x daily",
+            "status": "active",
+            "therapistNotes": "Perform slowly, focusing on extension."
+          }
+        ],
+        "createdAt": "2026-08-01T09:00:00.000Z"
+      }
+    }
+    ```
+- **Error Responses**:
+  - **`401 Unauthorized`**: Authentication missing or invalid.
+  - **`500 Internal Server Error`**: Database error.
+
+---
+
+#### 6.5 Update User Profile
+- **HTTP Method**: `PUT`
+- **URL**: `/api/users/me`
+- **Purpose**: Update user's non-sensitive profile information.
+- **Authentication**: Protected
+- **Allowed Roles**: `PATIENT`, `THERAPIST`
+- **Permissions**: Users can only update their own `name`. Patients **cannot** modify `role`, `assignedExercises`, or `therapistNotes`.
+- **Request Body**:
+  ```json
+  {
+    "name": "Jane Doe Patient"
+  }
+  ```
+- **Successful Response**:
+  - **HTTP Status Code**: `200 OK`
+  - **Body**:
+    ```json
+    {
+      "success": true,
+      "message": "Profile updated successfully",
+      "data": {
+        "id": "64d2f1a9b3c4d5e6f7a8b9c0",
+        "name": "Jane Doe Patient",
+        "email": "jane.patient@example.com",
+        "role": "PATIENT"
+      }
+    }
+    ```
+- **Error Responses**:
+  - **`400 Bad Request`**: Invalid profile data.
+  - **`401 Unauthorized`**: Authentication missing.
+
+---
+
+#### 6.6 List Managed Patients (Therapist Only)
+- **HTTP Method**: `GET`
+- **URL**: `/api/users/patients`
+- **Purpose**: Retrieve list of all patient user accounts managed by therapists.
+- **Authentication**: Protected
+- **Allowed Roles**: `THERAPIST`
+- **Request Parameters**:
+  - Query parameters: `?search=Jane` (optional name filter)
+- **Request Body**: None
+- **Successful Response**:
+  - **HTTP Status Code**: `200 OK`
+  - **Body**:
+    ```json
+    {
+      "success": true,
+      "data": [
+        {
+          "id": "64d2f1a9b3c4d5e6f7a8b9c0",
+          "name": "Jane Patient",
+          "email": "jane.patient@example.com",
+          "activeAssignmentsCount": 2,
+          "createdAt": "2026-08-01T09:00:00.000Z"
+        }
       ]
     }
-  ]
-}
-```
-
-### Errors
-
-```text
-401 Unauthorized
-500 Internal Server Error
-```
+    ```
+- **Error Responses**:
+  - **`401 Unauthorized`**: Authentication missing.
+  - **`403 Forbidden`**: User is a `PATIENT`.
 
 ---
 
-## 9.2 Get Exercise by ID
-
-```http
-GET /api/exercises/:id
-```
-
-### Authentication
-
-Required.
-
-### Purpose
-
-Retrieve one exercise by its ID.
-
-### Success
-
-```text
-200 OK
-```
-
-### Errors
-
-```text
-400 Bad Request
-401 Unauthorized
-404 Not Found
-500 Internal Server Error
-```
-
----
-
-## 9.3 Create Exercise
-
-```http
-POST /api/exercises
-```
-
-### Authentication
-
-Required.
-
-### Allowed role
-
-```text
-therapist
-```
-
-### Purpose
-
-Create a rehabilitation exercise.
-
-### Request body
-
-```json
-{
-  "name": "Knee Extension",
-  "description": "Exercise description",
-  "targetBodyPart": "Knee",
-  "difficulty": "Beginner",
-  "sets": 3,
-  "repetitions": 10,
-  "duration": null,
-  "instructions": [
-    "Instruction 1",
-    "Instruction 2"
-  ],
-  "demonstrationMedia": null,
-  "safetyInstructions": [
-    "Safety instruction"
-  ]
-}
-```
-
-### Success
-
-```text
-201 Created
-```
-
-### Errors
-
-```text
-400 Bad Request
-401 Unauthorized
-403 Forbidden
-500 Internal Server Error
-```
+#### 6.7 Get Detailed Patient Record (Therapist Only)
+- **HTTP Method**: `GET`
+- **URL**: `/api/users/patients/:id`
+- **Purpose**: Get comprehensive patient profile, including their embedded `assignedExercises[]` and `therapistNotes[]`.
+- **Authentication**: Protected
+- **Allowed Roles**: `THERAPIST`
+- **Request Parameters**:
+  - Path parameter: `:id` (`ObjectId`, Required) - Patient User ID.
+- **Request Body**: None
+- **Successful Response**:
+  - **HTTP Status Code**: `200 OK`
+  - **Body**:
+    ```json
+    {
+      "success": true,
+      "data": {
+        "id": "64d2f1a9b3c4d5e6f7a8b9c0",
+        "name": "Jane Patient",
+        "email": "jane.patient@example.com",
+        "role": "PATIENT",
+        "assignedExercises": [
+          {
+            "id": "64d2f2b1b3c4d5e6f7a8b9c1",
+            "exerciseId": "64d2f001b3c4d5e6f7a8b9e0",
+            "assignedBy": "64d2f000b3c4d5e6f7a8b9d0",
+            "assignedAt": "2026-08-30T10:00:00.000Z",
+            "dueDate": "2026-09-15T23:59:59.000Z",
+            "targetSets": 3,
+            "targetReps": 10,
+            "status": "active"
+          }
+        ],
+        "therapistNotes": [
+          {
+            "id": "64d2f3c2b3c4d5e6f7a8b9c2",
+            "therapistId": "64d2f000b3c4d5e6f7a8b9d0",
+            "note": "Flexion improving in left knee.",
+            "createdAt": "2026-08-28T14:30:00.000Z"
+          }
+        ]
+      }
+    }
+    ```
+- **Error Responses**:
+  - **`401 Unauthorized`**: Authentication missing.
+  - **`403 Forbidden`**: User is a `patient`.
+  - **`404 Not Found`**: Patient ID not found.
 
 ---
 
-## 9.4 Update Exercise
-
-```http
-PUT /api/exercises/:id
-```
-
-### Authentication
-
-Required.
-
-### Allowed role
-
-```text
-therapist
-```
-
-### Purpose
-
-Update an existing exercise.
-
-### Request body
-
-Uses the exercise data structure defined above.
-
-### Success
-
-```text
-200 OK
-```
-
-### Errors
-
-```text
-400 Bad Request
-401 Unauthorized
-403 Forbidden
-404 Not Found
-500 Internal Server Error
-```
-
----
-
-## 9.5 Delete Exercise
-
-```http
-DELETE /api/exercises/:id
-```
-
-### Authentication
-
-Required.
-
-### Allowed role
-
-```text
-therapist
-```
-
-### Purpose
-
-Delete an exercise.
-
-### Success
-
-```text
-200 OK
-```
-
-Example:
-
-```json
-{
-  "success": true,
-  "message": "Exercise deleted successfully"
-}
-```
-
-### Errors
-
-```text
-401 Unauthorized
-403 Forbidden
-404 Not Found
-500 Internal Server Error
-```
-
----
-
-# 10. Exercise Assignment Endpoints
-
-Exercise assignments connect patients with exercises.
-
-## 10.1 Create Assignment
-
-```http
-POST /api/assignments
-```
-
-### Authentication
-
-Required.
-
-### Allowed role
-
-```text
-therapist
-```
-
-### Request body
-
-```json
-{
-  "patient": "PATIENT_ID",
-  "exercise": "EXERCISE_ID",
-  "targets": {
-    "sets": 3,
-    "repetitions": 10
-  },
-  "dueDate": "2026-09-10"
-}
-```
-
-### Success
-
-```text
-201 Created
-```
-
-### Errors
-
-```text
-400 Bad Request
-401 Unauthorized
-403 Forbidden
-404 Not Found
-500 Internal Server Error
-```
-
----
-
-## 10.2 Get Patient Assignments
-
-```http
-GET /api/assignments
-```
-
-### Authentication
-
-Required.
-
-### Purpose
-
-Return assignments relevant to the authenticated user.
-
-For a patient, this should return their assigned exercises.
-
-For a therapist, this may return assignments they are authorized to view.
-
-### Success
-
-```text
-200 OK
-```
-
-### Errors
-
-```text
-401 Unauthorized
-500 Internal Server Error
-```
-
----
-
-## 10.3 Get Assignment by ID
-
-```http
-GET /api/assignments/:id
-```
-
-### Authentication
-
-Required.
-
-### Purpose
-
-Retrieve a specific exercise assignment.
-
-### Errors
-
-```text
-400 Bad Request
-401 Unauthorized
-403 Forbidden
-404 Not Found
-500 Internal Server Error
-```
-
----
-
-## 10.4 Update Assignment
-
-```http
-PUT /api/assignments/:id
-```
-
-### Authentication
-
-Required.
-
-### Allowed role
-
-```text
-therapist
-```
-
-### Purpose
-
-Update an existing exercise assignment.
-
-### Errors
-
-```text
-400 Bad Request
-401 Unauthorized
-403 Forbidden
-404 Not Found
-500 Internal Server Error
-```
-
----
-
-## 10.5 Delete Assignment
-
-```http
-DELETE /api/assignments/:id
-```
-
-### Authentication
-
-Required.
-
-### Allowed role
-
-```text
-therapist
-```
-
-### Purpose
-
-Remove an exercise assignment.
-
-### Errors
-
-```text
-401 Unauthorized
-403 Forbidden
-404 Not Found
-500 Internal Server Error
-```
-
----
-
-# 11. Exercise Session Endpoints
-
-Exercise sessions represent a patient's rehabilitation activity.
-
-## 11.1 Create Exercise Session
-
-```http
-POST /api/sessions
-```
-
-### Authentication
-
-Required.
-
-### Allowed role
-
-```text
-patient
-```
-
-### Purpose
-
-Create/store a completed exercise session.
-
-### Request body
-
-```json
-{
-  "exercise": "EXERCISE_ID",
-  "completionInformation": {
-    "completed": true
-  },
-  "painBefore": 4,
-  "painAfter": 3,
-  "difficulty": 2,
-  "sessionResults": {
-    "setsCompleted": 3,
-    "repetitionsCompleted": 10
+#### 6.8 Assign Exercise to Patient Subdocument (Therapist Only)
+- **HTTP Method**: `POST`
+- **URL**: `/api/users/patients/:id/assignments`
+- **Purpose**: Push a new exercise assignment subdocument into the patient's `assignedExercises[]` array.
+- **Authentication**: Protected
+- **Allowed Roles**: `therapist`
+- **Request Parameters**:
+  - Path parameter: `:id` (`ObjectId`, Required) - Target Patient User ID.
+- **Request Body**:
+  ```json
+  {
+    "exerciseId": "64d2f001b3c4d5e6f7a8b9e0",
+    "targetSets": 3,
+    "targetReps": 10,
+    "targetDurationSeconds": null,
+    "frequency": "2x daily",
+    "dueDate": "2026-09-15T23:59:59.000Z",
+    "therapistNotes": "Perform slowly, focusing on extension."
   }
-}
-```
-
-### Success
-
-```text
-201 Created
-```
-
-### Errors
-
-```text
-400 Bad Request
-401 Unauthorized
-403 Forbidden
-404 Not Found
-500 Internal Server Error
-```
-
----
-
-## 11.2 Get Patient Sessions
-
-```http
-GET /api/sessions
-```
-
-### Authentication
-
-Required.
-
-### Purpose
-
-Retrieve sessions relevant to the authenticated user.
-
-A patient should receive their own sessions.
-
-A therapist should only receive sessions for patients they are authorized to monitor.
-
-### Success
-
-```text
-200 OK
-```
-
-### Errors
-
-```text
-401 Unauthorized
-403 Forbidden
-500 Internal Server Error
-```
+  ```
+  - `exerciseId` (`ObjectId`, Required): Valid exercise from `exercises` collection.
+  - `targetSets` (`Number`, Required): Target set count.
+  - `targetReps` (`Number`, Optional): Target reps per set.
+  - `targetDurationSeconds` (`Number`, Optional): Target duration per set in seconds.
+  - `frequency` (`String`, Optional): Schedule string.
+  - `dueDate` (`Date`, Optional): Completion deadline.
+  - `therapistNotes` (`String`, Optional): Clinical instructions for assignment.
+- **Successful Response**:
+  - **HTTP Status Code**: `201 Created`
+  - **Body**:
+    ```json
+    {
+      "success": true,
+      "message": "Exercise assigned successfully",
+      "data": {
+        "id": "64d2f2b1b3c4d5e6f7a8b9c1",
+        "exerciseId": "64d2f001b3c4d5e6f7a8b9e0",
+        "assignedBy": "64d2f000b3c4d5e6f7a8b9d0",
+        "assignedAt": "2026-08-30T10:00:00.000Z",
+        "targetSets": 3,
+        "targetReps": 10,
+        "status": "active"
+      }
+    }
+    ```
+- **Error Responses**:
+  - **`400 Bad Request`**: Missing required fields or invalid exercise ID.
+  - **`401 Unauthorized`**: Authentication missing.
+  - **`403 Forbidden`**: Patients cannot assign exercises.
+  - **`404 Not Found`**: Patient or exercise not found.
 
 ---
 
-## 11.3 Get Session by ID
-
-```http
-GET /api/sessions/:id
-```
-
-### Authentication
-
-Required.
-
-### Purpose
-
-Retrieve a specific exercise session.
-
-### Errors
-
-```text
-400 Bad Request
-401 Unauthorized
-403 Forbidden
-404 Not Found
-500 Internal Server Error
-```
-
----
-
-# 12. Progress Endpoints
-
-Progress information is derived primarily from stored exercise session and rehabilitation data.
-
-## 12.1 Get Patient Progress
-
-```http
-GET /api/progress
-```
-
-### Authentication
-
-Required.
-
-### Purpose
-
-Return relevant rehabilitation progress for the authenticated patient.
-
-Progress may include information derived from:
-
-* Completed sessions.
-* Exercise completion.
-* Pain records.
-* Difficulty ratings.
-* Session results.
-
-### Success
-
-```text
-200 OK
-```
-
-### Errors
-
-```text
-401 Unauthorized
-500 Internal Server Error
-```
+#### 6.9 Update Assignment Subdocument
+- **HTTP Method**: `PUT`
+- **URL**: `/api/users/patients/:id/assignments/:assignmentId`
+- **Purpose**: Modify an existing assignment subdocument in the patient's record.
+- **Authentication**: Protected
+- **Allowed Roles**: `therapist`, `patient`
+- **Permissions by Role**:
+  - **`patient`**: Can ONLY update `status` (e.g. from `"active"` to `"completed"`). Cannot change target sets, reps, or due date.
+  - **`therapist`**: Full permission to update targets (`targetSets`, `targetReps`), `dueDate`, `frequency`, and `status`.
+- **Request Parameters**:
+  - Path parameters: `:id` (Patient User ID), `:assignmentId` (Assignment Subdocument ID).
+- **Request Body** (Patient view):
+  ```json
+  {
+    "status": "completed"
+  }
+  ```
+- **Request Body** (Therapist view):
+  ```json
+  {
+    "targetSets": 4,
+    "targetReps": 12,
+    "dueDate": "2026-09-20T23:59:59.000Z",
+    "status": "active"
+  }
+  ```
+- **Successful Response**:
+  - **HTTP Status Code**: `200 OK`
+  - **Body**:
+    ```json
+    {
+      "success": true,
+      "message": "Assignment updated successfully",
+      "data": {
+        "id": "64d2f2b1b3c4d5e6f7a8b9c1",
+        "status": "completed",
+        "updatedAt": "2026-08-30T12:00:00.000Z"
+      }
+    }
+    ```
+- **Error Responses**:
+  - **`400 Bad Request`**: Invalid status string or invalid target values.
+  - **`401 Unauthorized`**: Authentication missing.
+  - **`403 Forbidden`**: Patient attempting to modify therapist-only fields.
+  - **`404 Not Found`**: Assignment subdocument not found.
 
 ---
 
-## 12.2 Get Patient Progress as Therapist
-
-```http
-GET /api/progress/patient/:patientId
-```
-
-### Authentication
-
-Required.
-
-### Allowed role
-
-```text
-therapist
-```
-
-### Purpose
-
-Allow an authorized therapist to view relevant progress for a patient.
-
-### Errors
-
-```text
-401 Unauthorized
-403 Forbidden
-404 Not Found
-500 Internal Server Error
-```
+#### 6.10 Remove/Cancel Assignment Subdocument (Therapist Only)
+- **HTTP Method**: `DELETE`
+- **URL**: `/api/users/patients/:id/assignments/:assignmentId`
+- **Purpose**: Remove or mark assignment subdocument as cancelled.
+- **Authentication**: Protected
+- **Allowed Roles**: `therapist`
+- **Request Parameters**:
+  - Path parameters: `:id` (Patient ID), `:assignmentId` (Assignment ID).
+- **Request Body**: None
+- **Successful Response**:
+  - **HTTP Status Code**: `200 OK`
+  - **Body**:
+    ```json
+    {
+      "success": true,
+      "message": "Assignment removed successfully"
+    }
+    ```
+- **Error Responses**:
+  - **`401 Unauthorized`**: Authentication missing.
+  - **`403 Forbidden`**: Patients cannot delete assignments.
+  - **`404 Not Found`**: Assignment not found.
 
 ---
 
-# 13. Therapist Notes Endpoints
-
-## 13.1 Create Therapist Note
-
-```http
-POST /api/notes
-```
-
-### Authentication
-
-Required.
-
-### Allowed role
-
-```text
-therapist
-```
-
-### Request body
-
-```json
-{
-  "patient": "PATIENT_ID",
-  "note": "Patient is progressing well."
-}
-```
-
-### Success
-
-```text
-201 Created
-```
-
-### Errors
-
-```text
-400 Bad Request
-401 Unauthorized
-403 Forbidden
-404 Not Found
-500 Internal Server Error
-```
+#### 6.11 Add Therapist Clinical Note Subdocument (Therapist Only)
+- **HTTP Method**: `POST`
+- **URL**: `/api/users/patients/:id/notes`
+- **Purpose**: Push a clinical observation note into the patient's `therapistNotes[]` array.
+- **Authentication**: Protected
+- **Allowed Roles**: `therapist`
+- **Request Parameters**:
+  - Path parameter: `:id` (Patient User ID).
+- **Request Body**:
+  ```json
+  {
+    "note": "Patient completed knee extensions with zero pain reported."
+  }
+  ```
+  - `note` (`String`, Required): Clinical progress observation text.
+- **Successful Response**:
+  - **HTTP Status Code**: `201 Created`
+  - **Body**:
+    ```json
+    {
+      "success": true,
+      "message": "Therapist note recorded",
+      "data": {
+        "id": "64d2f3c2b3c4d5e6f7a8b9c2",
+        "therapistId": "64d2f000b3c4d5e6f7a8b9d0",
+        "note": "Patient completed knee extensions with zero pain reported.",
+        "createdAt": "2026-08-30T14:00:00.000Z"
+      }
+    }
+    ```
+- **Error Responses**:
+  - **`400 Bad Request`**: Note text missing.
+  - **`401 Unauthorized`**: Authentication missing.
+  - **`403 Forbidden`**: Patients cannot write notes.
+  - **`404 Not Found`**: Patient not found.
 
 ---
 
-## 13.2 Get Patient Notes
-
-```http
-GET /api/notes/patient/:patientId
-```
-
-### Authentication
-
-Required.
-
-### Allowed role
-
-```text
-therapist
-```
-
-### Purpose
-
-Retrieve therapist notes associated with a patient.
-
-### Errors
-
-```text
-401 Unauthorized
-403 Forbidden
-404 Not Found
-500 Internal Server Error
-```
-
----
-
-# 14. Pain Data
-
-Pain information is recorded as part of exercise sessions.
-
-The core API does not require a separate independent pain resource if pain is stored within the exercise session.
-
-The session should support:
-
-```text
-painBefore
-painAfter
-```
-
-The values can be used to generate patient history and progress information.
-
-Validation must ensure that pain values follow the agreed application scale.
-
-The exact scale and UI representation must remain consistent across frontend and backend.
+#### 6.12 Read Patient Therapist Notes (Therapist Only)
+- **HTTP Method**: `GET`
+- **URL**: `/api/users/patients/:id/notes`
+- **Purpose**: Retrieve clinical notes recorded for a patient.
+- **Authentication**: Protected
+- **Allowed Roles**: `therapist`
+- **Request Parameters**:
+  - Path parameter: `:id` (Patient User ID).
+- **Request Body**: None
+- **Successful Response**:
+  - **HTTP Status Code**: `200 OK`
+  - **Body**:
+    ```json
+    {
+      "success": true,
+      "data": [
+        {
+          "id": "64d2f3c2b3c4d5e6f7a8b9c2",
+          "therapistId": "64d2f000b3c4d5e6f7a8b9d0",
+          "note": "Patient completed knee extensions with zero pain reported.",
+          "createdAt": "2026-08-30T14:00:00.000Z"
+        }
+      ]
+    }
+    ```
+- **Error Responses**:
+  - **`401 Unauthorized`**: Authentication missing.
+  - **`403 Forbidden`**: Patients cannot read notes.
+  - **`404 Not Found`**: Patient not found.
 
 ---
 
-# 15. Guided Mode API Behaviour
-
-Guided Mode is the required core exercise mode.
-
-The frontend may use existing exercise and session APIs to support the Guided Mode workflow.
-
-Conceptually:
-
-```text
-GET exercise
-      ↓
-Patient starts session
-      ↓
-Guided Mode UI
-      ↓
-Patient completes exercise
-      ↓
-Pain before / after
-      ↓
-Difficulty rating
-      ↓
-POST /api/sessions
-      ↓
-Session stored
-```
-
-Guided Mode does not require a separate backend architecture merely because it is a different exercise mode.
+### AREA 3: EXERCISES ENDPOINTS (`/api/exercises`)
 
 ---
 
-# 16. Camera Mode Beta API Behaviour
-
-Camera Mode Beta is an optional advanced feature.
-
-The computer-vision processing may occur during the exercise session.
-
-The core API must not depend on raw camera-video storage.
-
-Where Camera Mode generates persistent session results, those results should be associated with the relevant exercise session.
-
-Camera Mode Beta must not make the core session workflow unusable when camera functionality is unavailable.
+#### 6.13 Get Exercise Catalog
+- **HTTP Method**: `GET`
+- **URL**: `/api/exercises`
+- **Purpose**: List available rehabilitation exercises in the master catalog.
+- **Authentication**: Protected
+- **Allowed Roles**: `patient`, `therapist`
+- **Request Parameters**:
+  - Query parameters (optional): `?targetBodyPart=Knee&difficulty=beginner`
+- **Request Body**: None
+- **Successful Response**:
+  - **HTTP Status Code**: `200 OK`
+  - **Body**:
+    ```json
+    {
+      "success": true,
+      "data": [
+        {
+          "id": "64d2f001b3c4d5e6f7a8b9e0",
+          "name": "Seated Knee Extension",
+          "description": "Strengthens the quadriceps muscles to support knee joint stability.",
+          "targetBodyPart": "Knee",
+          "difficulty": "beginner",
+          "defaultSets": 3,
+          "defaultReps": 10,
+          "instructions": [
+            "Sit upright with back supported.",
+            "Slowly extend leg straight out.",
+            "Pause for 2 seconds and lower."
+          ],
+          "demonstrationMedia": "https://assets.veltrix.app/exercises/knee-extension.mp4"
+        }
+      ]
+    }
+    ```
+- **Error Responses**:
+  - **`401 Unauthorized`**: Authentication missing.
+  - **`500 Internal Server Error`**: Database query error.
 
 ---
 
-# 17. Common Response Structure
+#### 6.14 Get Exercise Details by ID
+- **HTTP Method**: `GET`
+- **URL**: `/api/exercises/:id`
+- **Purpose**: Retrieve complete details of a single exercise.
+- **Authentication**: Protected
+- **Allowed Roles**: `patient`, `therapist`
+- **Request Parameters**:
+  - Path parameter: `:id` (`ObjectId`, Required).
+- **Request Body**: None
+- **Successful Response**:
+  - **HTTP Status Code**: `200 OK`
+  - **Body**:
+    ```json
+    {
+      "success": true,
+      "data": {
+        "id": "64d2f001b3c4d5e6f7a8b9e0",
+        "name": "Seated Knee Extension",
+        "description": "Strengthens quadriceps muscles.",
+        "targetBodyPart": "Knee",
+        "difficulty": "beginner",
+        "defaultSets": 3,
+        "defaultReps": 10,
+        "defaultDurationSeconds": null,
+        "instructions": ["Step 1", "Step 2"],
+        "demonstrationMedia": "https://assets.veltrix.app/exercises/knee-extension.mp4",
+        "safetyInstructions": "Stop if sharp pain occurs.",
+        "createdBy": "64d2f000b3c4d5e6f7a8b9d0"
+      }
+    }
+    ```
+- **Error Responses**:
+  - **`401 Unauthorized`**: Authentication missing.
+  - **`404 Not Found`**: Exercise ID does not exist.
 
-Where practical, successful API responses should follow a consistent structure.
+---
 
-Example:
+#### 6.15 Create Exercise Entry (Therapist Only)
+- **HTTP Method**: `POST`
+- **URL**: `/api/exercises`
+- **Purpose**: Add a new exercise to the master catalog.
+- **Authentication**: Protected
+- **Allowed Roles**: `therapist`
+- **Request Body**:
+  ```json
+  {
+    "name": "Shoulder Abduction",
+    "description": "Lateral arm lift to build deltoid strength.",
+    "targetBodyPart": "Shoulder",
+    "difficulty": "intermediate",
+    "defaultSets": 3,
+    "defaultReps": 12,
+    "defaultDurationSeconds": null,
+    "instructions": ["Stand upright with feet shoulder-width apart.", "Lift arm out to side to 90 degrees."],
+    "demonstrationMedia": "https://assets.veltrix.app/exercises/shoulder-abduction.mp4",
+    "safetyInstructions": "Do not lift past 90 degrees if impingement pain occurs."
+  }
+  ```
+  - `name` (`String`, Required): Unique exercise name.
+  - `description` (`String`, Required): Guidance text.
+  - `targetBodyPart` (`String`, Required): Body area.
+  - `difficulty` (`String`, Required): `"beginner"`, `"intermediate"`, or `"advanced"`.
+  - `instructions` (`Array<String>`, Required): Step list.
+- **Successful Response**:
+  - **HTTP Status Code**: `201 Created`
+  - **Body**:
+    ```json
+    {
+      "success": true,
+      "message": "Exercise created successfully",
+      "data": {
+        "id": "64d2f002b3c4d5e6f7a8b9e1",
+        "name": "Shoulder Abduction",
+        "targetBodyPart": "Shoulder",
+        "difficulty": "intermediate",
+        "createdBy": "64d2f000b3c4d5e6f7a8b9d0"
+      }
+    }
+    ```
+- **Error Responses**:
+  - **`400 Bad Request`**: Missing required fields or duplicate exercise name.
+  - **`401 Unauthorized`**: Authentication missing.
+  - **`403 Forbidden`**: Patients cannot create exercises.
 
+---
+
+#### 6.16 Update Exercise Entry (Therapist Only)
+- **HTTP Method**: `PUT`
+- **URL**: `/api/exercises/:id`
+- **Purpose**: Modify an existing exercise in the catalog.
+- **Authentication**: Protected
+- **Allowed Roles**: `therapist`
+- **Request Parameters**:
+  - Path parameter: `:id` (Exercise ID).
+- **Request Body**: Same structure as `POST /api/exercises`.
+- **Successful Response**:
+  - **HTTP Status Code**: `200 OK`
+  - **Body**:
+    ```json
+    {
+      "success": true,
+      "message": "Exercise updated successfully"
+    }
+    ```
+- **Error Responses**:
+  - **`400 Bad Request`**: Invalid update data.
+  - **`401 Unauthorized`**: Authentication missing.
+  - **`403 Forbidden`**: Patients cannot update exercises.
+  - **`404 Not Found`**: Exercise not found.
+
+---
+
+#### 6.17 Delete Exercise Entry (Therapist Only)
+- **HTTP Method**: `DELETE`
+- **URL**: `/api/exercises/:id`
+- **Purpose**: Delete or archive an exercise entry.
+- **Authentication**: Protected
+- **Allowed Roles**: `therapist`
+- **Request Parameters**:
+  - Path parameter: `:id` (Exercise ID).
+- **Request Body**: None
+- **Successful Response**:
+  - **HTTP Status Code**: `200 OK`
+  - **Body**:
+    ```json
+    {
+      "success": true,
+      "message": "Exercise deleted successfully"
+    }
+    ```
+- **Error Responses**:
+  - **`401 Unauthorized`**: Authentication missing.
+  - **`403 Forbidden`**: Patients cannot delete exercises.
+  - **`404 Not Found`**: Exercise not found.
+
+---
+
+### AREA 4: EXERCISE SESSIONS ENDPOINTS (`/api/sessions`)
+
+---
+
+#### 6.18 Log Completed Exercise Session (Patient Only)
+- **HTTP Method**: `POST`
+- **URL**: `/api/sessions`
+- **Purpose**: Submit a completed exercise session, pain ratings, effort, and performance metrics.
+- **Authentication**: Protected
+- **Allowed Roles**: `patient`
+- **Request Parameters**: None
+- **Request Body**:
+  ```json
+  {
+    "exerciseId": "64d2f001b3c4d5e6f7a8b9e0",
+    "assignmentId": "64d2f2b1b3c4d5e6f7a8b9c1",
+    "completedAt": "2026-08-30T11:15:00.000Z",
+    "setsCompleted": 3,
+    "repsCompleted": 10,
+    "durationSeconds": 180,
+    "painBefore": 4,
+    "painAfter": 2,
+    "perceivedDifficulty": "moderate",
+    "sessionResults": {
+      "accuracyPercentage": 92.5,
+      "feedback": "Felt comfortable during set 3."
+    }
+  }
+  ```
+  - `exerciseId` (`ObjectId`, Required): Reference to `exercises._id`.
+  - `assignmentId` (`ObjectId`, Optional): Reference to `assignedExercises._id` subdocument.
+  - `setsCompleted` (`Number`, Required): Number of sets.
+  - `durationSeconds` (`Number`, Optional): Total elapsed time in seconds from session start to session completion, including rest intervals.
+  - `painBefore` (`Number`, Required): Pain level 0–10 before exercise.
+  - `painAfter` (`Number`, Required): Pain level 0–10 after exercise.
+  - `perceivedDifficulty` (`String`, Required): `"easy"`, `"moderate"`, or `"hard"`.
+- **Successful Response**:
+  - **HTTP Status Code**: `201 Created`
+  - **Body**:
+    ```json
+    {
+      "success": true,
+      "message": "Exercise session logged successfully",
+      "data": {
+        "id": "64d2f5e3b3c4d5e6f7a8b9f0",
+        "patientId": "64d2f1a9b3c4d5e6f7a8b9c0",
+        "exerciseId": "64d2f001b3c4d5e6f7a8b9e0",
+        "completedAt": "2026-08-30T11:15:00.000Z",
+        "setsCompleted": 3,
+        "painBefore": 4,
+        "painAfter": 2,
+        "perceivedDifficulty": "moderate"
+      }
+    }
+    ```
+- **Error Responses**:
+  - **`400 Bad Request`**: Invalid pain score range (must be 0-10) or missing required fields.
+  - **`401 Unauthorized`**: Authentication missing.
+  - **`403 Forbidden`**: Therapists cannot log patient sessions.
+
+---
+
+#### 6.19 Get Exercise Sessions History
+- **HTTP Method**: `GET`
+- **URL**: `/api/sessions`
+- **Purpose**: Fetch session history. For a patient, returns their own sessions. For a therapist, returns sessions for their managed patients.
+- **Authentication**: Protected
+- **Allowed Roles**: `patient`, `therapist`
+- **Request Parameters**:
+  - Query parameters (optional): `?limit=10&startDate=2026-08-01`
+- **Request Body**: None
+- **Successful Response**:
+  - **HTTP Status Code**: `200 OK`
+  - **Body**:
+    ```json
+    {
+      "success": true,
+      "data": [
+        {
+          "id": "64d2f5e3b3c4d5e6f7a8b9f0",
+          "patientId": "64d2f1a9b3c4d5e6f7a8b9c0",
+          "exerciseId": "64d2f001b3c4d5e6f7a8b9e0",
+          "completedAt": "2026-08-30T11:15:00.000Z",
+          "setsCompleted": 3,
+          "repsCompleted": 10,
+          "painBefore": 4,
+          "painAfter": 2,
+          "perceivedDifficulty": "moderate"
+        }
+      ]
+    }
+    ```
+- **Error Responses**:
+  - **`401 Unauthorized`**: Authentication missing.
+  - **`500 Internal Server Error`**: Database error.
+
+---
+
+#### 6.20 Get Session Details by ID
+- **HTTP Method**: `GET`
+- **URL**: `/api/sessions/:id`
+- **Purpose**: Retrieve complete details for a single logged session.
+- **Authentication**: Protected
+- **Allowed Roles**: `patient`, `therapist`
+- **Request Parameters**:
+  - Path parameter: `:id` (Session ID).
+- **Request Body**: None
+- **Successful Response**:
+  - **HTTP Status Code**: `200 OK`
+  - **Body**:
+    ```json
+    {
+      "success": true,
+      "data": {
+        "id": "64d2f5e3b3c4d5e6f7a8b9f0",
+        "patientId": "64d2f1a9b3c4d5e6f7a8b9c0",
+        "exerciseId": "64d2f001b3c4d5e6f7a8b9e0",
+        "completedAt": "2026-08-30T11:15:00.000Z",
+        "setsCompleted": 3,
+        "repsCompleted": 10,
+        "durationSeconds": 180,
+        "painBefore": 4,
+        "painAfter": 2,
+        "perceivedDifficulty": "moderate",
+        "sessionResults": {
+          "accuracyPercentage": 92.5,
+          "feedback": "Felt comfortable during set 3."
+        }
+      }
+    }
+    ```
+- **Error Responses**:
+  - **`401 Unauthorized`**: Authentication missing.
+  - **`403 Forbidden`**: Patient trying to access another patient's session.
+  - **`404 Not Found`**: Session not found.
+
+---
+
+#### 6.21 Get Specific Patient Session History (Therapist Only)
+- **HTTP Method**: `GET`
+- **URL**: `/api/sessions/patient/:patientId`
+- **Purpose**: Retrieve complete session logs for a specified patient.
+- **Authentication**: Protected
+- **Allowed Roles**: `therapist`
+- **Request Parameters**:
+  - Path parameter: `:patientId` (`ObjectId`, Required).
+- **Request Body**: None
+- **Successful Response**:
+  - **HTTP Status Code**: `200 OK`
+  - **Body**: Same array format as `GET /api/sessions`.
+- **Error Responses**:
+  - **`401 Unauthorized`**: Authentication missing.
+  - **`403 Forbidden`**: User is a `patient`.
+  - **`404 Not Found`**: Patient ID not found.
+
+---
+
+### AREA 5: PATIENT DASHBOARD ENDPOINT (`/api/dashboard/patient`)
+
+---
+
+#### 6.22 Get Patient Dashboard Data (Patient Only)
+- **HTTP Method**: `GET`
+- **URL**: `/api/dashboard/patient`
+- **Purpose**: Fetch aggregated dashboard data for the authenticated patient, including active assigned exercises, recent completed sessions, pain summary, and compliance stats.
+- **Authentication**: Protected
+- **Allowed Roles**: `patient`
+- **Request Parameters**: None
+- **Request Body**: None
+- **Successful Response**:
+  - **HTTP Status Code**: `200 OK`
+  - **Body**:
+    ```json
+    {
+      "success": true,
+      "data": {
+        "activeAssignments": [
+          {
+            "id": "64d2f2b1b3c4d5e6f7a8b9c1",
+            "exerciseId": "64d2f001b3c4d5e6f7a8b9e0",
+            "exerciseName": "Seated Knee Extension",
+            "targetSets": 3,
+            "targetReps": 10,
+            "dueDate": "2026-09-15T23:59:59.000Z",
+            "status": "active"
+          }
+        ],
+        "recentSessions": [
+          {
+            "id": "64d2f5e3b3c4d5e6f7a8b9f0",
+            "exerciseName": "Seated Knee Extension",
+            "completedAt": "2026-08-30T11:15:00.000Z",
+            "painBefore": 4,
+            "painAfter": 2
+          }
+        ],
+        "summary": {
+          "totalCompletedSessions": 12,
+          "averagePainReduction": 1.8,
+          "adherenceRatePercentage": 90.0
+        }
+      }
+    }
+    ```
+- **Error Responses**:
+  - **`401 Unauthorized`**: Authentication missing.
+  - **`403 Forbidden`**: Therapists cannot access patient dashboard route.
+
+---
+
+### AREA 6: THERAPIST DASHBOARD ENDPOINT (`/api/dashboard/therapist`)
+
+---
+
+#### 6.23 Get Therapist Dashboard Data (Therapist Only)
+- **HTTP Method**: `GET`
+- **URL**: `/api/dashboard/therapist`
+- **Purpose**: Fetch aggregated clinical dashboard metrics for the authenticated therapist, including managed patient count, active programs, recent patient completions, and pain alerts.
+- **Authentication**: Protected
+- **Allowed Roles**: `therapist`
+- **Request Parameters**: None
+- **Request Body**: None
+- **Successful Response**:
+  - **HTTP Status Code**: `200 OK`
+  - **Body**:
+    ```json
+    {
+      "success": true,
+      "data": {
+        "metrics": {
+          "totalManagedPatients": 15,
+          "activeExercisePrograms": 28,
+          "sessionsCompletedThisWeek": 42
+        },
+        "recentPatientActivity": [
+          {
+            "patientId": "64d2f1a9b3c4d5e6f7a8b9c0",
+            "patientName": "Jane Patient",
+            "lastSessionAt": "2026-08-30T11:15:00.000Z",
+            "exerciseName": "Seated Knee Extension",
+            "painDelta": -2
+          }
+        ],
+        "clinicalAlerts": [
+          {
+            "patientId": "64d2f1a9b3c4d5e6f7a8b9c0",
+            "patientName": "Jane Patient",
+            "alertType": "High Pain Rating",
+            "message": "Reported pain level 8 after session on 2026-08-29."
+          }
+        ]
+      }
+    }
+    ```
+- **Error Responses**:
+  - **`401 Unauthorized`**: Authentication missing.
+  - **`403 Forbidden`**: Patients cannot access therapist dashboard route.
+
+---
+
+## 7. Common Response & Error Specifications
+
+### Success Format Standard
+All successful API responses return `200 OK` or `201 Created` with the JSON structure:
 ```json
 {
   "success": true,
-  "message": "Operation successful",
+  "message": "Optional user-friendly message",
   "data": {}
 }
 ```
 
-For collections:
-
-```json
-{
-  "success": true,
-  "data": []
-}
-```
-
-The exact response data depends on the endpoint.
-
----
-
-# 18. Common Error Response
-
-API errors should use a consistent structure.
-
-Example:
-
+### Error Format Standard
+All API errors return standard HTTP error status codes with JSON body:
 ```json
 {
   "success": false,
-  "message": "Error description",
+  "message": "Clear error explanation",
   "error": "ERROR_CODE"
 }
 ```
 
-The API should not expose sensitive implementation details, passwords, secrets, database credentials, stack traces, or internal system information to clients.
+### Summary of HTTP Status Codes
+
+| Status Code | Meaning | Context & Trigger |
+| :--- | :--- | :--- |
+| **`200 OK`** | Success | Request succeeded and data returned. |
+| **`201 Created`** | Created | Resource (user, exercise, session, subdocument) created successfully. |
+| **`400 Bad Request`** | Bad Input | Missing required fields, invalid format, or out-of-bounds parameters. |
+| **`401 Unauthorized`** | Auth Missing | Invalid, expired, or missing JWT Bearer token. |
+| **`403 Forbidden`** | Unauthorized Role | Authenticated role (`patient` or `therapist`) lacks permission for endpoint/field. |
+| **`404 Not Found`** | Not Found | Requested entity or subdocument ID does not exist. |
+| **`409 Conflict`** | Conflict | Duplicate entry (e.g. registering already existing email). |
+| **`500 Internal Error`** | Server Fault | Unhandled exception or database failure. |
 
 ---
 
-# 19. HTTP Status Code Rules
+## 8. Representative API Request & Response Examples
 
-VELTRIX should use standard HTTP status codes consistently.
+This section provides concrete, end-to-end HTTP request and response examples for each core API area. All payloads adhere to the canonical schema names, embedded subdocument structures, and authentication requirements specified in this contract.
 
-| Status | Meaning                             |
-| ------ | ----------------------------------- |
-| 200    | Request successful                  |
-| 201    | Resource created successfully       |
-| 400    | Invalid request or validation error |
-| 401    | Authentication required or invalid  |
-| 403    | Authenticated but not authorized    |
-| 404    | Resource not found                  |
-| 409    | Resource conflict                   |
-| 500    | Unexpected server error             |
+### 8.1 Authentication API Examples
 
----
+#### Example 1.1: Register New User (`POST /api/auth/register`)
+- **HTTP Request**:
+  ```http
+  POST /api/auth/register HTTP/1.1
+  Host: api.veltrix.app
+  Content-Type: application/json
 
-# 20. Validation Rules
+  {
+    "name": "Jane Patient",
+    "email": "jane.patient@example.com",
+    "password": "SecurePassword123",
+    "role": "PATIENT"
+  }
+  ```
+- **HTTP Response (`201 Created`)**:
+  ```json
+  {
+    "success": true,
+    "message": "User registered successfully",
+    "data": {
+      "id": "64d2f1a9b3c4d5e6f7a8b9c0",
+      "name": "Jane Patient",
+      "email": "jane.patient@example.com",
+      "role": "PATIENT",
+      "createdAt": "2026-08-30T10:00:00.000Z"
+    }
+  }
+  ```
 
-Backend validation is required even if the frontend already validates input.
+#### Example 1.2: Login User (`POST /api/auth/login`)
+- **HTTP Request**:
+  ```http
+  POST /api/auth/login HTTP/1.1
+  Host: api.veltrix.app
+  Content-Type: application/json
 
-The backend must validate:
+  {
+    "email": "jane.patient@example.com",
+    "password": "SecurePassword123"
+  }
+  ```
+- **HTTP Response (`200 OK`)**:
+  ```json
+  {
+    "success": true,
+    "message": "Login successful",
+    "data": {
+      "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2NGQyZjFhOWIzYzRkNWU2ZjdhOGI5YzAiLCJlbWFpbCI6ImphbmUucGF0aWVudEBleGFtcGxlLmNvbSIsInJvbGUiOiJwYXRpZW50IiwiaWF0IjoxNzU2NTY3NjAwLCJleHAiOjE3NTY2NTQwMDB9...",
+      "user": {
+        "id": "64d2f1a9b3c4d5e6f7a8b9c0",
+        "name": "Jane Patient",
+        "email": "jane.patient@example.com",
+        "role": "PATIENT"
+      }
+    }
+  }
+  ```
 
-* Required fields.
-* Data types.
-* Valid identifiers.
-* Valid user roles.
-* Valid exercise references.
-* Valid patient references.
-* Valid session information.
-* Valid pain values.
-* Valid difficulty values.
-* Appropriate relationships between resources.
-
-Frontend validation improves user experience but must not replace backend validation.
-
----
-
-# 21. Authorization Rules
-
-Authorization must be enforced on the backend.
-
-### Patient
-
-Patients can:
-
-* View their own assigned exercises.
-* Complete their own exercise sessions.
-* View their own progress and history.
-* Submit their own rehabilitation information.
-
-Patients must not:
-
-* Manage exercises.
-* Delete therapist-created exercises.
-* Access another patient's private information.
-* Modify another patient's sessions.
-* Access therapist-only functionality.
-
-### Therapist
-
-Therapists can:
-
-* Manage exercises.
-* Assign exercises.
-* View authorized patient information.
-* View relevant patient sessions.
-* View patient progress.
-* View pain history.
-* Create therapist notes.
-
-Therapists must not access patients outside their authorized scope.
-
----
-
-# 22. Resource Relationships
-
-The API must preserve the relationships defined in the database contract.
-
-```text
-User
-│
-├── Patient
-│   │
-│   ├── Exercise Assignment
-│   │       └── Exercise
-│   │
-│   └── Exercise Session
-│           └── Exercise
-│
-└── Therapist
-    │
-    ├── Exercise
-    ├── Exercise Assignment
-    └── Therapist Note
-```
-
-IDs should be used to reference related resources rather than duplicating complete objects unnecessarily.
+#### Example 1.3: Get Current User Context (`GET /api/auth/me`)
+- **HTTP Request**:
+  ```http
+  GET /api/auth/me HTTP/1.1
+  Host: api.veltrix.app
+  Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+  ```
+- **HTTP Response (`200 OK`)**:
+  ```json
+  {
+    "success": true,
+    "data": {
+      "id": "64d2f1a9b3c4d5e6f7a8b9c0",
+      "name": "Jane Patient",
+      "email": "jane.patient@example.com",
+      "role": "PATIENT"
+    }
+  }
+  ```
 
 ---
 
-# 23. API and Database Consistency
+### 8.2 Exercise Catalog API Examples
 
-The API contract must remain consistent with `DATABASE-CONTRACT.md`.
+#### Example 2.1: List Exercise Catalog (`GET /api/exercises`)
+- **HTTP Request**:
+  ```http
+  GET /api/exercises?targetBodyPart=Knee&difficulty=beginner HTTP/1.1
+  Host: api.veltrix.app
+  Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+  ```
+- **HTTP Response (`200 OK`)**:
+  ```json
+  {
+    "success": true,
+    "data": [
+      {
+        "id": "64d2f001b3c4d5e6f7a8b9e0",
+        "name": "Seated Knee Extension",
+        "description": "Strengthens quadriceps muscles to improve knee joint mobility.",
+        "targetBodyPart": "Knee",
+        "difficulty": "beginner",
+        "defaultSets": 3,
+        "defaultReps": 10,
+        "defaultDurationSeconds": null,
+        "instructions": [
+          "Sit upright in a chair with back supported.",
+          "Slowly extend your leg straight out parallel to the ground.",
+          "Hold for 2 seconds and return to starting position."
+        ],
+        "demonstrationMedia": "https://assets.veltrix.app/exercises/knee-extension.mp4",
+        "safetyInstructions": "Stop immediately if sharp joint pain occurs.",
+        "createdBy": "64d2f000b3c4d5e6f7a8b9d0"
+      }
+    ]
+  }
+  ```
 
-For example:
+#### Example 2.2: Get Exercise Details by ID (`GET /api/exercises/:id`)
+- **HTTP Request**:
+  ```http
+  GET /api/exercises/64d2f001b3c4d5e6f7a8b9e0 HTTP/1.1
+  Host: api.veltrix.app
+  Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+  ```
+- **HTTP Response (`200 OK`)**:
+  ```json
+  {
+    "success": true,
+    "data": {
+      "id": "64d2f001b3c4d5e6f7a8b9e0",
+      "name": "Seated Knee Extension",
+      "description": "Strengthens quadriceps muscles to improve knee joint mobility.",
+      "targetBodyPart": "Knee",
+      "difficulty": "beginner",
+      "defaultSets": 3,
+      "defaultReps": 10,
+      "defaultDurationSeconds": null,
+      "instructions": [
+        "Sit upright in a chair with back supported.",
+        "Slowly extend your leg straight out parallel to the ground.",
+        "Hold for 2 seconds and return to starting position."
+      ],
+      "demonstrationMedia": "https://assets.veltrix.app/exercises/knee-extension.mp4",
+      "safetyInstructions": "Stop immediately if sharp joint pain occurs.",
+      "createdBy": "64d2f000b3c4d5e6f7a8b9d0"
+    }
+  }
+  ```
 
-```text
-Database Contract
-       ↓
-Exercise fields
-       ↓
-API Request/Response
-       ↓
-Frontend
-```
+#### Example 2.3: Create Exercise in Catalog (`POST /api/exercises`)
+- **HTTP Request**:
+  ```http
+  POST /api/exercises HTTP/1.1
+  Host: api.veltrix.app
+  Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9... (Therapist Token)
+  Content-Type: application/json
 
-If an approved project change modifies a database field or relationship, the corresponding API contract must also be reviewed and updated.
+  {
+    "name": "Standing Ankle Plantarflexion",
+    "description": "Calf raise exercise to improve ankle stability and plantar flexion strength.",
+    "targetBodyPart": "Ankle",
+    "difficulty": "beginner",
+    "defaultSets": 3,
+    "defaultReps": 15,
+    "defaultDurationSeconds": null,
+    "instructions": [
+      "Stand upright holding onto a chair or wall for balance.",
+      "Slowly raise your heels up off the floor until standing on toes.",
+      "Pause for 1 second at full extension.",
+      "Lower heels slowly back to the starting position."
+    ],
+    "demonstrationMedia": "https://assets.veltrix.app/exercises/ankle-plantarflexion.mp4",
+    "safetyInstructions": "Maintain controlled motion; do not bounce."
+  }
+  ```
+- **HTTP Response (`201 Created`)**:
+  ```json
+  {
+    "success": true,
+    "message": "Exercise created successfully",
+    "data": {
+      "id": "64d2f003b3c4d5e6f7a8b9e2",
+      "name": "Standing Ankle Plantarflexion",
+      "description": "Calf raise exercise to improve ankle stability and plantar flexion strength.",
+      "targetBodyPart": "Ankle",
+      "difficulty": "beginner",
+      "defaultSets": 3,
+      "defaultReps": 15,
+      "defaultDurationSeconds": null,
+      "instructions": [
+        "Stand upright holding onto a chair or wall for balance.",
+        "Slowly raise your heels up off the floor until standing on toes.",
+        "Pause for 1 second at full extension.",
+        "Lower heels slowly back to the starting position."
+      ],
+      "demonstrationMedia": "https://assets.veltrix.app/exercises/ankle-plantarflexion.mp4",
+      "safetyInstructions": "Maintain controlled motion; do not bounce.",
+      "createdBy": "64d2f000b3c4d5e6f7a8b9d0",
+      "createdAt": "2026-08-30T15:30:00.000Z",
+      "updatedAt": "2026-08-30T15:30:00.000Z"
+    }
+  }
+  ```
 
 ---
 
-# 24. API Security Principles
+### 8.3 Exercise Assignment API Example (Embedded Subdocument)
 
-The API must:
+#### Example 3.1: Assign Exercise to Patient (`POST /api/users/patients/:id/assignments`)
+- **HTTP Request**:
+  ```http
+  POST /api/users/patients/64d2f1a9b3c4d5e6f7a8b9c0/assignments HTTP/1.1
+  Host: api.veltrix.app
+  Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9... (Therapist Token)
+  Content-Type: application/json
 
-* Require authentication for protected resources.
-* Enforce authorization on the backend.
-* Validate all incoming data.
-* Never trust role information supplied only by the client.
-* Never store plaintext passwords.
-* Never expose passwords in API responses.
-* Avoid exposing sensitive server information.
-* Use environment variables for secrets and sensitive configuration.
-* Protect patient-specific data from unauthorized access.
-
----
-
-# 25. API Testing
-
-The API shall be tested using Postman.
-
-Testing should cover:
-
-* Successful requests.
-* Invalid requests.
-* Authentication failures.
-* Authorization failures.
-* Missing resources.
-* Invalid identifiers.
-* CRUD operations.
-* Patient workflows.
-* Therapist workflows.
-* Exercise assignments.
-* Exercise sessions.
-* Progress retrieval.
-* Therapist notes.
-
-Both successful and error responses should be tested.
-
----
-
-# 26. Frontend Integration Rules
-
-Frontend developers must use the API contract rather than assuming backend behaviour.
-
-The frontend should:
-
-* Use the documented endpoint.
-* Use the documented HTTP method.
-* Send the documented request structure.
-* Handle documented response structures.
-* Handle relevant HTTP status codes.
-* Send authentication information for protected endpoints.
-* Never directly access MongoDB.
-
-If an API requirement needs to change, the team should agree on the change and update the contract before implementing incompatible frontend/backend changes.
+  {
+    "exerciseId": "64d2f001b3c4d5e6f7a8b9e0",
+    "targetSets": 3,
+    "targetReps": 10,
+    "targetDurationSeconds": null,
+    "frequency": "2x daily",
+    "dueDate": "2026-09-15T23:59:59.000Z",
+    "therapistNotes": "Perform slowly, focusing on extension."
+  }
+  ```
+- **HTTP Response (`201 Created`)**:
+  ```json
+  {
+    "success": true,
+    "message": "Exercise assigned successfully",
+    "data": {
+      "id": "64d2f2b1b3c4d5e6f7a8b9c1",
+      "exerciseId": "64d2f001b3c4d5e6f7a8b9e0",
+      "assignedBy": "64d2f000b3c4d5e6f7a8b9d0",
+      "assignedAt": "2026-08-30T10:00:00.000Z",
+      "dueDate": "2026-09-15T23:59:59.000Z",
+      "targetSets": 3,
+      "targetReps": 10,
+      "targetDurationSeconds": null,
+      "frequency": "2x daily",
+      "status": "active",
+      "therapistNotes": "Perform slowly, focusing on extension."
+    }
+  }
+  ```
 
 ---
 
-# 27. Contract Change Rule
+### 8.4 Therapist Clinical Notes API Example (Embedded Subdocument)
 
-This document is a shared technical contract.
+#### Example 4.1: Add Therapist Note (`POST /api/users/patients/:id/notes`)
+- **HTTP Request**:
+  ```http
+  POST /api/users/patients/64d2f1a9b3c4d5e6f7a8b9c0/notes HTTP/1.1
+  Host: api.veltrix.app
+  Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9... (Therapist Token)
+  Content-Type: application/json
 
-Before changing:
-
-* Endpoint names.
-* HTTP methods.
-* Request fields.
-* Response fields.
-* Authentication requirements.
-* Roles/permissions.
-* Resource relationships.
-
-the affected team members should agree on the change and update this document.
-
-The frontend and backend should then be updated consistently.
-
----
-
-# 28. Core API Summary
-
-| Area           | Main Endpoints                          |
-| -------------- | --------------------------------------- |
-| Authentication | `/api/auth/register`, `/api/auth/login` |
-| Users          | `/api/users/me`                         |
-| Exercises      | `/api/exercises`                        |
-| Assignments    | `/api/assignments`                      |
-| Sessions       | `/api/sessions`                         |
-| Progress       | `/api/progress`                         |
-| Notes          | `/api/notes`                            |
-
-The exact endpoint implementation may evolve during development, but any approved change must be reflected in this contract.
+  {
+    "note": "Patient completed knee extensions with zero pain reported and improved range of motion."
+  }
+  ```
+- **HTTP Response (`201 Created`)**:
+  ```json
+  {
+    "success": true,
+    "message": "Therapist note recorded successfully",
+    "data": {
+      "id": "64d2f3c2b3c4d5e6f7a8b9c2",
+      "therapistId": "64d2f000b3c4d5e6f7a8b9d0",
+      "note": "Patient completed knee extensions with zero pain reported and improved range of motion.",
+      "createdAt": "2026-08-30T14:00:00.000Z",
+      "updatedAt": "2026-08-30T14:00:00.000Z"
+    }
+  }
+  ```
 
 ---
 
-# 29. Core VELTRIX API Flow
+### 8.5 Exercise Sessions API Example
 
-The main application flow is:
+#### Example 5.1: Log Completed Exercise Session (`POST /api/sessions`)
+- **HTTP Request**:
+  ```http
+  POST /api/sessions HTTP/1.1
+  Host: api.veltrix.app
+  Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9... (Patient Token)
+  Content-Type: application/json
 
-```text
-                    VELTRIX API
-                        │
-        ┌───────────────┼────────────────┐
-        ↓               ↓                ↓
-   Authentication    Exercises       Assignments
-        │               │                │
-        └───────────────┼────────────────┘
-                        ↓
-                  Patient Session
-                        │
-                        ↓
-              Pain + Difficulty
-                        │
-                        ↓
-                  POST /sessions
-                        │
-                        ↓
-                 Progress / History
-                        │
-              ┌─────────┴─────────┐
-              ↓                   ↓
-           Patient            Therapist
-```
+  {
+    "exerciseId": "64d2f001b3c4d5e6f7a8b9e0",
+    "assignmentId": "64d2f2b1b3c4d5e6f7a8b9c1",
+    "completedAt": "2026-08-30T11:15:00.000Z",
+    "setsCompleted": 3,
+    "repsCompleted": 10,
+    "durationSeconds": 180,
+    "painBefore": 4,
+    "painAfter": 2,
+    "perceivedDifficulty": "moderate",
+    "sessionResults": {
+      "accuracyPercentage": 92.5,
+      "feedback": "Felt comfortable during set 3."
+    }
+  }
+  ```
+- **HTTP Response (`201 Created`)**:
+  ```json
+  {
+    "success": true,
+    "message": "Exercise session logged successfully",
+    "data": {
+      "id": "64d2f5e3b3c4d5e6f7a8b9f0",
+      "patientId": "64d2f1a9b3c4d5e6f7a8b9c0",
+      "exerciseId": "64d2f001b3c4d5e6f7a8b9e0",
+      "assignmentId": "64d2f2b1b3c4d5e6f7a8b9c1",
+      "completedAt": "2026-08-30T11:15:00.000Z",
+      "setsCompleted": 3,
+      "repsCompleted": 10,
+      "durationSeconds": 180,
+      "painBefore": 4,
+      "painAfter": 2,
+      "perceivedDifficulty": "moderate",
+      "sessionResults": {
+        "accuracyPercentage": 92.5,
+        "feedback": "Felt comfortable during set 3."
+      },
+      "createdAt": "2026-08-30T11:16:00.000Z",
+      "updatedAt": "2026-08-30T11:16:00.000Z"
+    }
+  }
+  ```
 
-The API layer therefore acts as the central communication contract connecting VELTRIX's React frontend with its Node.js/Express backend and MongoDB data layer.
+---
 
-```
-```
+### 8.6 Dashboard APIs Examples
+
+#### Example 6.1: Patient Dashboard (`GET /api/dashboard/patient`)
+- **HTTP Request**:
+  ```http
+  GET /api/dashboard/patient HTTP/1.1
+  Host: api.veltrix.app
+  Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9... (Patient Token)
+  ```
+- **HTTP Response (`200 OK`)**:
+  ```json
+  {
+    "success": true,
+    "data": {
+      "activeAssignments": [
+        {
+          "id": "64d2f2b1b3c4d5e6f7a8b9c1",
+          "exerciseId": "64d2f001b3c4d5e6f7a8b9e0",
+          "exerciseName": "Seated Knee Extension",
+          "targetSets": 3,
+          "targetReps": 10,
+          "dueDate": "2026-09-15T23:59:59.000Z",
+          "status": "active"
+        }
+      ],
+      "recentSessions": [
+        {
+          "id": "64d2f5e3b3c4d5e6f7a8b9f0",
+          "exerciseName": "Seated Knee Extension",
+          "completedAt": "2026-08-30T11:15:00.000Z",
+          "painBefore": 4,
+          "painAfter": 2
+        }
+      ],
+      "summary": {
+        "totalCompletedSessions": 12,
+        "averagePainReduction": 1.8,
+        "adherenceRatePercentage": 90.0
+      }
+    }
+  }
+  ```
+
+#### Example 6.2: Therapist Dashboard (`GET /api/dashboard/therapist`)
+- **HTTP Request**:
+  ```http
+  GET /api/dashboard/therapist HTTP/1.1
+  Host: api.veltrix.app
+  Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9... (Therapist Token)
+  ```
+- **HTTP Response (`200 OK`)**:
+  ```json
+  {
+    "success": true,
+    "data": {
+      "metrics": {
+        "totalManagedPatients": 15,
+        "activeExercisePrograms": 28,
+        "sessionsCompletedThisWeek": 42
+      },
+      "recentPatientActivity": [
+        {
+          "patientId": "64d2f1a9b3c4d5e6f7a8b9c0",
+          "patientName": "Jane Patient",
+          "lastSessionAt": "2026-08-30T11:15:00.000Z",
+          "exerciseName": "Seated Knee Extension",
+          "painDelta": -2
+        }
+      ],
+      "clinicalAlerts": [
+        {
+          "patientId": "64d2f1a9b3c4d5e6f7a8b9c0",
+          "patientName": "Jane Patient",
+          "alertType": "High Pain Rating",
+          "message": "Reported pain level 8 after session on 2026-08-29."
+        }
+      ]
+    }
+  }
+  ```

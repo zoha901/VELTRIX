@@ -334,11 +334,11 @@ Authorization answers:
 
 > "What are you allowed to do?"
 
-VELTRIX has two main roles:
+VELTRIX has two main roles following the official shared convention:
 
 ```text
-Patient
-Therapist
+PATIENT
+THERAPIST
 ```
 
 The backend must enforce role-based access.

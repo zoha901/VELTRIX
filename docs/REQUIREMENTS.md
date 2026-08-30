@@ -8,8 +8,8 @@ This document defines the main functional and technical requirements of the VELT
 
 VELTRIX has two primary roles:
 
-- Patient
-- Therapist
+- PATIENT
+- THERAPIST
 
 Each role must have appropriate access and permissions.
 
@@ -19,7 +19,7 @@ The system shall provide:
 
 - User registration and login.
 - JWT-based authentication.
-- Password hashing.
+- Password hashing (bcrypt with min 10 salt rounds) and minimum 8-character password length.
 - Role-based access control.
 
 ## 4. Patient Requirements
@@ -112,6 +112,7 @@ The system shall store completed exercise sessions, including relevant informati
 
 - Patient and exercise.
 - Completion information.
+- Total elapsed time (`durationSeconds`, representing total time from session start to completion including rest intervals).
 - Pain before and after exercise.
 - Difficulty rating.
 - Session timing/results.

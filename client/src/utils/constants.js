@@ -23,6 +23,7 @@ export const ROUTES = {
     ROOT: '/therapist',
     DASHBOARD: '/therapist/dashboard',
     PATIENTS: '/therapist/patients',
+    PATIENT_DETAILS: '/therapist/patients/:patientId',
     EXERCISES: '/therapist/exercises',
     SESSIONS: '/therapist/sessions',
   },

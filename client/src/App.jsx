@@ -16,6 +16,7 @@ import PatientProgress from './pages/patient/PatientProgress';
 // Therapist Pages
 import TherapistDashboard from './pages/therapist/TherapistDashboard';
 import TherapistPatients from './pages/therapist/TherapistPatients';
+import TherapistPatientDetails from './pages/therapist/TherapistPatientDetails';
 import TherapistExercises from './pages/therapist/TherapistExercises';
 import TherapistSessions from './pages/therapist/TherapistSessions';
 
@@ -42,6 +43,7 @@ function App() {
         <Route index element={<Navigate to="/therapist/dashboard" replace />} />
         <Route path="dashboard" element={<TherapistDashboard />} />
         <Route path="patients" element={<TherapistPatients />} />
+        <Route path="patients/:patientId" element={<TherapistPatientDetails />} />
         <Route path="exercises" element={<TherapistExercises />} />
         <Route path="sessions" element={<TherapistSessions />} />
       </Route>

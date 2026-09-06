@@ -1,12 +1,17 @@
 import { NavLink, Link } from 'react-router-dom';
+import { useAuth } from '../hooks/useAuth';
 
 export default function Navbar({ title = 'VELTRIX', portalName = '', links = [] }) {
+  const { logout } = useAuth();
+
   return (
     <header className="navbar-container">
       <div className="navbar-brand">
         <Link to="/" className="brand-logo">
           <span className="brand-name">{title}</span>
-          {portalName && <span className="portal-badge">{portalName}</span>}
+          {portalName && (
+            <span className="portal-badge">{portalName}</span>
+          )}
         </Link>
       </div>
 
@@ -25,9 +30,13 @@ export default function Navbar({ title = 'VELTRIX', portalName = '', links = [] 
       </nav>
 
       <div className="navbar-actions">
-        <Link to="/login" className="btn btn-outline">
-          Switch Role / Exit
-        </Link>
+        <button
+          type="button"
+          className="btn btn-outline"
+          onClick={logout}
+        >
+          Logout
+        </button>
       </div>
     </header>
   );

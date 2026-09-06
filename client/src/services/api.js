@@ -1,10 +1,3 @@
-/**
- * API Service Client Placeholder for VELTRIX
- * 
- * Central Axios instance configuration.
- * Note: Actual endpoints and API calls will be added when backend integration begins.
- */
-
 import axios from 'axios';
 
 const api = axios.create({
@@ -13,5 +6,20 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
 });
+
+api.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('veltrix_token');
+
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
 
 export default api;
